@@ -1,0 +1,6 @@
+ticket_id,customer_name,subject,message,created_at
+1001,Acme Corp,Payment failed,"Our invoice payment failed twice and this is urgent.",2026-09-01 10:15:00
+1002,Globex,Login issue,"I cannot log in after resetting my password.",2026-09-01 11:20:00
+1003,Initech,Slow dashboard,"The dashboard is extremely slow since this morning.",2026-09-02 09:05:00
+1004,Umbrella Corp,Refund request,"We were charged twice and need a refund.",2026-09-02 13:40:00
+1005,Stark Industries,Feature request,"Can you add export to Excel for monthly reports?",2026-09-03 15:10:00
