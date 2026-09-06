@@ -50,6 +50,8 @@ jobs:
 
       - name: Terraform validate
         run: terraform validate
+      - name: Terraform init
+        run: terraform init -backend=false
 
   deploy:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
