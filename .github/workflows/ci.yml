@@ -6,6 +6,10 @@ on:
       - main
   pull_request:
 
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
   python-checks:
     runs-on: ubuntu-latest
@@ -25,8 +29,7 @@ jobs:
           pip install snowflake-connector-python pandas kagglehub requests
 
       - name: Validate Python syntax
-        run: |
-          python -m compileall python/
+        run: python -m compileall python/
 
   terraform-checks:
     runs-on: ubuntu-latest
@@ -50,8 +53,6 @@ jobs:
 
       - name: Terraform validate
         run: terraform validate
-      - name: Terraform init
-        run: terraform init -backend=false
 
   deploy:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
@@ -71,6 +72,12 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/270391017115/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: github-terraform-cd@project-03c38b46-d98d-4021-bf9.iam.gserviceaccount.com
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
