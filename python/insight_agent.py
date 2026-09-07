@@ -5,35 +5,35 @@ from llm_client import call_llm
 def insight_agent_node(state: AgentState):
     rows = state["sql_result"]
 
-    total = sum(count for _, count in rows)
+    if not rows:
+        return {
+            "insight": "No data was returned for this question."
+        }
 
-    formatted_rows = []
-    for risk_level, count in rows:
-        percentage = round((count / total) * 100, 2)
-        formatted_rows.append(
-            f"{risk_level}: {count} tickets ({percentage}%)"
-        )
-
-    facts = "\n".join(formatted_rows)
+    # Handle errors returned by Data Agent
+    if rows[0][0] == "ERROR":
+        return {
+            "insight": f"Data retrieval failed: {rows[0][1]}"
+        }
 
     prompt = f"""
 You are a support operations analyst.
 
-These are verified facts calculated by Python:
+User question:
+{state["user_question"]}
 
-{facts}
+These are verified query results returned from Snowflake:
 
-Important:
-- Do not recalculate totals.
-- Do not change the numbers.
-- Treat HIGH_RISK as highest severity even if it has fewer tickets.
+{rows}
 
-Explain:
-1. What this distribution means
-2. What needs operational attention
-3. One practical recommendation
-
-Keep the answer concise.
+Rules:
+- Do not invent numbers.
+- Do not recalculate values unless necessary.
+- Base your answer only on the provided results.
+- Explain the most important pattern.
+- Give one practical operational recommendation.
+- Keep the response concise.
+- RESOLUTION_TIME_HOURS values are measured in hours, not days.
 """
 
     insight = call_llm(prompt)
