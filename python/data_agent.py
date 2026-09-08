@@ -2,34 +2,49 @@ from agent_state import AgentState
 from llm_client import call_llm
 from sql_guard import validate_sql
 from snowflake_tool import (
-    run_snowflake_query,
     validate_snowflake_query,
+    run_snowflake_query,
 )
 
 
 def clean_sql(text: str) -> str:
-    text = text.replace("```sql", "").replace("```", "").strip()
+    """
+    Extract a single SQL SELECT statement from LLM output.
+    """
+
+    text = (
+        text
+        .replace("```sql", "")
+        .replace("```SQL", "")
+        .replace("```", "")
+        .strip()
+    )
 
     start = text.upper().find("SELECT")
 
     if start == -1:
-        return text
+        return text.strip()
 
     sql = text[start:]
 
     semicolon = sql.find(";")
 
     if semicolon != -1:
-        sql = sql[:semicolon + 1]
+        sql = sql[: semicolon + 1]
 
     return sql.strip()
 
 
-def data_agent_node(state: AgentState):
-    question = state["user_question"]
+def generate_sql(question: str) -> str:
+    """
+    Generate constrained Snowflake SQL from a natural-language question.
+    """
 
     prompt = f"""
 You are a Snowflake analytics agent.
+
+Your responsibility is to convert the user's analytical question
+into exactly one safe Snowflake SELECT query.
 
 User question:
 
@@ -54,43 +69,45 @@ RESOLUTION_TIME_HOURS
 ASSIGNED_AGENT
 SATISFACTION_SCORE
 
-Generate exactly ONE SELECT query.
-
 Rules:
-- SQL only
-- No explanation
-- No markdown
-- No joins
-- Use only the columns above
-- Use the fully qualified table name
-- For "worst", sort the relevant metric descending
+
+- Return SQL only.
+- Do not return explanations.
+- Do not return markdown.
+- Generate exactly one SELECT query.
+- Never use INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, MERGE, or TRUNCATE.
+- Use only the table and columns listed above.
+- Always use the fully qualified table name.
+- Avoid joins.
+- Prefer the simplest query that answers the question.
+- Perform calculations and aggregations inside Snowflake.
+- RESOLUTION_TIME_HOURS is measured in hours.
+- If the user asks for the "worst" resolution time, higher values are worse,
+  therefore sort the relevant resolution metric descending.
 """
 
-    sql = clean_sql(call_llm(prompt))
+    raw_output = call_llm(prompt)
 
-    print("\nGenerated SQL:")
-    print(sql)
+    return clean_sql(raw_output)
 
-    # Layer 1: deterministic safety validation
-    if not validate_sql(sql):
-        return {
-            "sql_result": [
-                ("ERROR", "Generated SQL failed safety validation")
-            ]
-        }
 
-    # Layer 2: Snowflake compilation validation
-    is_valid, error = validate_snowflake_query(sql)
+def repair_sql(
+    question: str,
+    sql: str,
+    error: str,
+) -> str:
+    """
+    Allow exactly one controlled LLM repair attempt.
+    """
 
-    if not is_valid:
-        repair_prompt = f"""
+    prompt = f"""
 You are repairing a Snowflake SELECT query.
 
 Original user question:
 
 {question}
 
-Generated SQL:
+Original SQL:
 
 {sql}
 
@@ -98,80 +115,272 @@ Snowflake compilation error:
 
 {error}
 
-Fix the SQL.
-
-Available tables and columns:
+Allowed table:
 
 AI_ENGINEERING_LAB.CURATED.CUSTOMER_SUPPORT_TICKETS
-- TICKET_ID
-- CUSTOMER_NAME
-- CUSTOMER_EMAIL
-- TICKET_SUBJECT
-- TICKET_DESCRIPTION
-- ISSUE_CATEGORY
-- PRIORITY_LEVEL
-- TICKET_CHANNEL
-- SUBMISSION_DATE
-- RESOLUTION_TIME_HOURS
-- ASSIGNED_AGENT
-- SATISFACTION_SCORE
 
-AI_ENGINEERING_LAB.ANALYTICS.SUPPORT_OPERATION_METRICS
-- ISSUE_CATEGORY
-- TICKET_CHANNEL
-- PRIORITY_LEVEL
-- TICKET_COUNT
-- AVG_RESOLUTION_HOURS
-- AVG_SATISFACTION_SCORE
-- HIGH_PRIORITY_TICKETS
+Available columns:
 
-AI_ENGINEERING_LAB.ANALYTICS.SUPPORT_SLA_RISK
-- TICKET_ID
-- ISSUE_CATEGORY
-- PRIORITY_LEVEL
-- TICKET_CHANNEL
-- RESOLUTION_TIME_HOURS
-- SATISFACTION_SCORE
-- SLA_RISK_LEVEL
+TICKET_ID
+CUSTOMER_NAME
+CUSTOMER_EMAIL
+TICKET_SUBJECT
+TICKET_DESCRIPTION
+ISSUE_CATEGORY
+PRIORITY_LEVEL
+TICKET_CHANNEL
+SUBMISSION_DATE
+RESOLUTION_TIME_HOURS
+ASSIGNED_AGENT
+SATISFACTION_SCORE
 
 Rules:
+
 - Return SQL only.
-- SELECT only.
-- Do not use markdown.
+- Generate exactly one SELECT query.
+- Do not return markdown.
+- Do not return explanations.
 - Do not invent columns.
-- Avoid unnecessary joins.
-- Prefer the simplest query.
-- Use fully qualified table names.
+- Do not use joins.
+- Use only the allowed table.
+- Use the fully qualified table name.
+- Preserve the original business question.
+- Prefer the simplest valid query.
 """
 
-        repaired_sql = clean_sql(call_llm(repair_prompt))
+    repaired_output = call_llm(prompt)
 
-        print("\nRepaired SQL:")
-        print(repaired_sql)
+    return clean_sql(repaired_output)
 
-        # Safety-check repaired SQL again
-        if not validate_sql(repaired_sql):
+
+def data_agent_node(state: AgentState):
+    """
+    Convert the user question into governed Snowflake SQL,
+    validate it, optionally repair it once, execute it,
+    and return verified query results.
+    """
+
+    question = state["user_question"]
+
+    trace = state.get("execution_trace", []).copy()
+
+    # ---------------------------------------------------------
+    # 1. Generate SQL
+    # ---------------------------------------------------------
+
+    try:
+        generated_sql = generate_sql(question)
+
+    except Exception as exc:
+        trace.append(
+            f"Data Agent SQL generation failed: {exc}"
+        )
+
+        return {
+            "generated_sql": None,
+            "sql_validation_status": "GENERATION_FAILED",
+            "sql_error": str(exc),
+            "sql_result": [
+                (
+                    "ERROR",
+                    f"SQL generation failed: {exc}",
+                )
+            ],
+            "current_node": "data_agent",
+            "execution_trace": trace,
+        }
+
+    print("Generated SQL:")
+    print(generated_sql)
+
+    trace.append("Data Agent generated SQL")
+
+    # ---------------------------------------------------------
+    # 2. Application SQL Policy Guard
+    # ---------------------------------------------------------
+
+    if not validate_sql(generated_sql):
+
+        trace.append(
+            "SQL Guard rejected generated query"
+        )
+
+        return {
+            "generated_sql": generated_sql,
+            "sql_validation_status": "FAILED_POLICY",
+            "sql_error": (
+                "Generated SQL failed application safety validation."
+            ),
+            "sql_result": [
+                (
+                    "ERROR",
+                    "Generated SQL failed application safety validation.",
+                )
+            ],
+            "current_node": "data_agent",
+            "execution_trace": trace,
+        }
+
+    trace.append("SQL Guard passed")
+
+    # ---------------------------------------------------------
+    # 3. Snowflake Compilation Validation
+    # ---------------------------------------------------------
+
+    is_valid, validation_error = (
+        validate_snowflake_query(generated_sql)
+    )
+
+    # ---------------------------------------------------------
+    # 4. One Bounded Repair Attempt
+    # ---------------------------------------------------------
+
+    if not is_valid:
+
+        trace.append(
+            "Snowflake EXPLAIN validation failed"
+        )
+
+        trace.append(
+            "Bounded SQL repair attempted"
+        )
+
+        try:
+            repaired_sql = repair_sql(
+                question=question,
+                sql=generated_sql,
+                error=validation_error or "Unknown Snowflake error",
+            )
+
+        except Exception as exc:
+
+            trace.append(
+                f"SQL repair failed: {exc}"
+            )
+
             return {
+                "generated_sql": generated_sql,
+                "sql_validation_status": "REPAIR_FAILED",
+                "sql_error": str(exc),
                 "sql_result": [
-                    ("ERROR", "Repaired SQL failed safety validation")
-                ]
+                    (
+                        "ERROR",
+                        f"SQL repair failed: {exc}",
+                    )
+                ],
+                "current_node": "data_agent",
+                "execution_trace": trace,
             }
 
-        # Compile-check repaired SQL again
-        is_valid, error = validate_snowflake_query(repaired_sql)
+        # Treat repaired SQL as new untrusted SQL
+        generated_sql = repaired_sql
+
+        trace.append(
+            "Data Agent generated repaired SQL"
+        )
+
+        # Re-run application safety guard
+        if not validate_sql(generated_sql):
+
+            trace.append(
+                "SQL Guard rejected repaired query"
+            )
+
+            return {
+                "generated_sql": generated_sql,
+                "sql_validation_status": "REPAIR_POLICY_FAILED",
+                "sql_error": (
+                    "Repaired SQL failed application safety validation."
+                ),
+                "sql_result": [
+                    (
+                        "ERROR",
+                        "Repaired SQL failed application safety validation.",
+                    )
+                ],
+                "current_node": "data_agent",
+                "execution_trace": trace,
+            }
+
+        trace.append(
+            "Repaired SQL passed SQL Guard"
+        )
+
+        # Re-run Snowflake compilation validation
+        is_valid, validation_error = (
+            validate_snowflake_query(generated_sql)
+        )
 
         if not is_valid:
+
+            trace.append(
+                "Repaired SQL failed Snowflake EXPLAIN validation"
+            )
+
             return {
+                "generated_sql": generated_sql,
+                "sql_validation_status": "REPAIR_VALIDATION_FAILED",
+                "sql_error": validation_error,
                 "sql_result": [
-                    ("ERROR", f"SQL repair failed: {error}")
-                ]
+                    (
+                        "ERROR",
+                        validation_error
+                        or "Repaired SQL failed Snowflake validation.",
+                    )
+                ],
+                "current_node": "data_agent",
+                "execution_trace": trace,
             }
 
-        sql = repaired_sql
+        trace.append(
+            "Repaired SQL passed Snowflake EXPLAIN validation"
+        )
 
-    # Only execute once SQL passed both validation layers
-    result = run_snowflake_query(sql)
+    else:
+
+        trace.append(
+            "Snowflake EXPLAIN validation passed"
+        )
+
+    # ---------------------------------------------------------
+    # 5. Execute Verified Query
+    # ---------------------------------------------------------
+
+    try:
+        result = run_snowflake_query(
+            generated_sql
+        )
+
+    except Exception as exc:
+
+        trace.append(
+            f"Snowflake query execution failed: {exc}"
+        )
+
+        return {
+            "generated_sql": generated_sql,
+            "sql_validation_status": "EXECUTION_FAILED",
+            "sql_error": str(exc),
+            "sql_result": [
+                (
+                    "ERROR",
+                    f"Snowflake query execution failed: {exc}",
+                )
+            ],
+            "current_node": "data_agent",
+            "execution_trace": trace,
+        }
+
+    trace.append(
+        f"Snowflake query executed successfully: "
+        f"{len(result)} rows returned"
+    )
 
     return {
-        "sql_result": result
+        "generated_sql": generated_sql,
+        "sql_validation_status": "PASSED",
+        "sql_error": None,
+        "sql_result": result,
+        "current_node": "data_agent",
+        "execution_trace": trace,
     }
