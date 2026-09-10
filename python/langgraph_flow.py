@@ -70,7 +70,7 @@ builder.add_conditional_edges(
     route_from_supervisor,
     {
         "data_agent": "data_agent",
-        "final": END,
+        "final": "final_response",
     },
 )
 

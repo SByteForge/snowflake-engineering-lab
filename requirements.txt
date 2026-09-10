@@ -5,4 +5,4 @@ langgraph
 langchain-core
 groq
 requests
-kagglehub
+kagglehubpython-dotenv

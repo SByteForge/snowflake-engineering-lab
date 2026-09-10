@@ -8,17 +8,72 @@ ALLOWED_ROUTES = {
 }
 
 
-def supervisor_node(state: AgentState):
-    """
-    Decide which path the LangGraph workflow should take.
-    """
+DATA_KEYWORDS = {
+    "ticket",
+    "tickets",
+    "category",
+    "categories",
+    "channel",
+    "channels",
+    "priority",
+    "priorities",
+    "resolution",
+    "satisfaction",
+    "agent",
+    "agents",
+    "sla",
+    "risk",
+    "average",
+    "count",
+    "highest",
+    "lowest",
+    "worst",
+    "best",
+    "metric",
+    "metrics",
+}
 
+
+def supervisor_node(state: AgentState):
     question = state["user_question"]
 
-    prompt = f"""
-You are the supervisor agent for an enterprise support analytics platform.
+    trace = state.get(
+        "execution_trace",
+        [],
+    ).copy()
 
-Your responsibility is ONLY to decide which route should handle the request.
+    question_lower = question.lower()
+
+    # -----------------------------------------------------
+    # 1. Deterministic routing for obvious analytics
+    # -----------------------------------------------------
+
+    if any(
+        keyword in question_lower
+        for keyword in DATA_KEYWORDS
+    ):
+        route = "data_agent"
+
+        trace.append(
+            "Supervisor selected route: data_agent "
+            "(deterministic analytics routing)"
+        )
+
+        return {
+            "route": route,
+            "current_node": "supervisor",
+            "execution_trace": trace,
+        }
+
+    # -----------------------------------------------------
+    # 2. LLM routing for ambiguous requests
+    # -----------------------------------------------------
+
+    prompt = f"""
+You are the routing supervisor for an enterprise
+customer-support analytics platform.
+
+Your ONLY responsibility is to select the next route.
 
 User question:
 
@@ -27,14 +82,43 @@ User question:
 Available routes:
 
 data_agent
-- Use when answering the question requires querying Snowflake data.
-- Examples include tickets, SLA risk, channels, issue categories,
-  resolution time, satisfaction, priority, workload, or support metrics.
+Use this whenever answering the question requires
+looking at Snowflake data.
 
-final
-- Use when the request does not require querying enterprise support data.
+This includes questions involving:
 
-Return ONLY one value:
+- tickets
+- issue categories
+- support channels
+- priorities
+- assigned agents
+- ticket counts
+- resolution time
+- satisfaction scores
+- SLA metrics
+- risk
+- averages
+- rankings
+- comparisons
+- highest / lowest
+- best / worst
+- trends or operational metrics
+
+Examples:
+
+"Which issue categories have the highest average resolution time?"
+→ data_agent
+
+"Which support channel has the lowest satisfaction?"
+→ data_agent
+
+"How many tickets are high priority?"
+→ data_agent
+
+"What is this application?"
+→ final
+
+Return ONLY:
 
 data_agent
 
@@ -44,28 +128,35 @@ final
 """
 
     try:
-        route = call_llm(prompt).strip().lower()
+        raw_route = call_llm(prompt)
+
+        route = (
+            raw_route
+            .strip()
+            .lower()
+            .replace("`", "")
+        )
+
+        # Handle occasional extra model text
+        if "data_agent" in route:
+            route = "data_agent"
+        elif "final" in route:
+            route = "final"
+        else:
+            route = "data_agent"
 
     except Exception as exc:
-        # Safe deterministic fallback
-        route = "final"
+        # For this analytics-focused application,
+        # data_agent is the safer functional fallback.
+        route = "data_agent"
 
-        trace = state.get("execution_trace", []) + [
-            f"Supervisor LLM failed; fallback route selected: final ({exc})"
-        ]
+        trace.append(
+            f"Supervisor LLM routing failed: {exc}"
+        )
 
-        return {
-            "route": route,
-            "current_node": "supervisor",
-            "execution_trace": trace,
-        }
-
-    if route not in ALLOWED_ROUTES:
-        route = "final"
-
-    trace = state.get("execution_trace", []) + [
+    trace.append(
         f"Supervisor selected route: {route}"
-    ]
+    )
 
     return {
         "route": route,

@@ -1,25 +1,20 @@
 from agent_state import AgentState
 
 
-def final_response_node(
-    state: AgentState,
-):
-    """
-    Convert internal insight into the user-facing response.
-    """
+def final_response_node(state: AgentState):
 
     trace = state.get(
         "execution_trace",
         [],
     ).copy()
 
-    final_answer = state.get(
-        "insight"
-    )
+    insight = state.get("insight")
 
-    if not final_answer:
+    if insight:
+        final_answer = insight
+    else:
         final_answer = (
-            "The workflow completed but no final insight was generated."
+            "This request did not require a Snowflake analytical query."
         )
 
     trace.append(

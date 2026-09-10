@@ -1,4 +1,4 @@
-# Insight and Final Response Flow
+                                                                                                                               # Insight and Final Response Flow
 
 This document explains how verified Snowflake query results are converted into user-facing business interpretation.
 
