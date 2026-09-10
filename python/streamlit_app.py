@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 
-from db import get_connection
+from db import get_connection, get_config
 from langgraph_flow import graph
 
 
@@ -50,17 +50,15 @@ st.markdown(
         margin-bottom: 0.4rem;
     }
 
-    .architecture-card {
-        border: 1px solid #e5e7eb;
-        border-radius: 12px;
-        padding: 1rem;
-        margin-bottom: 1rem;
-    }
-
     .trace-item {
         border-left: 3px solid #9ca3af;
         padding: 0.45rem 0.9rem;
         margin-bottom: 0.5rem;
+    }
+
+    .small-muted {
+        color: #6b7280;
+        font-size: 0.9rem;
     }
 
     </style>
@@ -70,14 +68,50 @@ st.markdown(
 
 
 # =========================================================
+# Platform Configuration Check
+# =========================================================
+
+def check_platform_config():
+    missing = []
+
+    required = [
+        "SNOWFLAKE_USER",
+        "SNOWFLAKE_PASSWORD",
+        "SNOWFLAKE_ACCOUNT",
+        "GROQ_API_KEY",
+    ]
+
+    for name in required:
+        if not get_config(name):
+            missing.append(name)
+
+    return missing
+
+
+missing_config = check_platform_config()
+
+if missing_config:
+    st.error("Platform configuration is incomplete.")
+
+    st.write(
+        "Missing configuration:",
+        ", ".join(missing_config),
+    )
+
+    st.info(
+        "Configure these values in your local .env file "
+        "or in Streamlit Cloud Secrets."
+    )
+
+    st.stop()
+
+
+# =========================================================
 # Sidebar
 # =========================================================
 
 with st.sidebar:
-
-    st.markdown(
-        "## ❄️ Snowflake AI Platform"
-    )
+    st.markdown("## ❄️ Snowflake AI Platform")
 
     st.caption(
         "Governed Data + Agentic Intelligence"
@@ -132,7 +166,7 @@ st.markdown(
 
     <div class="platform-subtitle">
         Governed enterprise analytics with observable
-        LangGraph agent orchestration.
+        LangGraph orchestration and Snowflake-backed intelligence.
     </div>
     """,
     unsafe_allow_html=True,
@@ -146,24 +180,19 @@ st.markdown("---")
 # =========================================================
 
 def run_query(sql: str):
-
     conn = get_connection()
     cursor = conn.cursor()
 
     try:
-
         cursor.execute(sql)
-
         return cursor.fetchall()
 
     finally:
-
         cursor.close()
         conn.close()
 
 
 def get_scalar(sql: str):
-
     rows = run_query(sql)
 
     if not rows:
@@ -177,7 +206,6 @@ def get_scalar(sql: str):
 # =========================================================
 
 if page == "Ask the Agent":
-
     st.markdown(
         '<div class="section-title">'
         'Natural Language Analytics'
@@ -204,17 +232,13 @@ if page == "Ask the Agent":
     )
 
     if run_clicked:
-
         if not question.strip():
-
             st.warning(
                 "Please enter a question."
             )
 
         else:
-
             initial_state = {
-
                 "user_question": question,
 
                 "route": None,
@@ -233,16 +257,13 @@ if page == "Ask the Agent":
             }
 
             try:
-
                 with st.spinner(
                     "Running LangGraph agent workflow..."
                 ):
-
                     result = graph.invoke(
                         initial_state
                     )
 
-                # Save result between Streamlit pages
                 st.session_state[
                     "latest_agent_result"
                 ] = result
@@ -255,21 +276,27 @@ if page == "Ask the Agent":
                     "### Analysis Result"
                 )
 
-                st.markdown(
-                    result.get(
-                        "final_answer",
-                        "No response generated.",
-                    )
+                final_answer = result.get(
+                    "final_answer"
                 )
 
-                st.success(
-                    "Agent workflow completed successfully."
-                )
+                if final_answer:
+                    st.markdown(
+                        final_answer
+                    )
+
+                    st.success(
+                        "Agent workflow completed successfully."
+                    )
+
+                else:
+                    st.warning(
+                        "The workflow completed but no final answer was generated."
+                    )
 
                 with st.expander(
                     "Technical Execution Trace"
                 ):
-
                     st.write(
                         "Route:",
                         result.get("route"),
@@ -282,6 +309,10 @@ if page == "Ask the Agent":
                         ),
                     )
 
+                    st.markdown(
+                        "#### Generated SQL"
+                    )
+
                     st.code(
                         result.get(
                             "generated_sql"
@@ -290,16 +321,27 @@ if page == "Ask the Agent":
                         language="sql",
                     )
 
-                    st.write(
-                        "Snowflake Result:"
+                    st.markdown(
+                        "#### Snowflake Result"
                     )
 
                     st.write(
-                        result.get("sql_result")
+                        result.get(
+                            "sql_result"
+                        )
+                    )
+
+                    st.markdown(
+                        "#### Insight"
+                    )
+
+                    st.write(
+                        result.get(
+                            "insight"
+                        )
                     )
 
             except Exception as exc:
-
                 st.error(
                     "The agent workflow could not complete."
                 )
@@ -315,7 +357,6 @@ if page == "Ask the Agent":
 # =========================================================
 
 elif page == "Orchestrator":
-
     st.markdown(
         '<div class="section-title">'
         'LangGraph Orchestrator'
@@ -325,7 +366,8 @@ elif page == "Orchestrator":
 
     st.write(
         "Inspect how the latest request moved through "
-        "agents, validation layers, tools, and Snowflake."
+        "routing, SQL generation, validation, tools, "
+        "Snowflake, and insight generation."
     )
 
     result = st.session_state.get(
@@ -333,17 +375,11 @@ elif page == "Orchestrator":
     )
 
     if not result:
-
         st.info(
             "Run a request from 'Ask the Agent' first."
         )
 
     else:
-
-        # -------------------------------------------------
-        # Runtime Summary
-        # -------------------------------------------------
-
         sql_rows = result.get(
             "sql_result"
         )
@@ -355,6 +391,10 @@ elif page == "Orchestrator":
             row_count = len(sql_rows)
         else:
             row_count = 0
+
+        # -------------------------------------------------
+        # Runtime Summary
+        # -------------------------------------------------
 
         c1, c2, c3, c4 = st.columns(4)
 
@@ -388,29 +428,47 @@ elif page == "Orchestrator":
         st.markdown("---")
 
         # -------------------------------------------------
-        # Runtime Flow
+        # Execution Path
         # -------------------------------------------------
 
         st.markdown(
             "### Execution Path"
         )
 
+        route = result.get(
+            "route"
+        )
+
+        validation = result.get(
+            "sql_validation_status"
+        )
+
         flow = [
             "👤 User Request",
             "🧭 Supervisor Agent",
-            f"🔀 Route → {result.get('route')}",
-            "🧠 Data Agent",
-            "📝 Text-to-SQL Generation",
-            "🛡️ SQL Policy Guard",
-            "❄️ Snowflake EXPLAIN Validation",
-            "🔧 Snowflake Query Tool",
-            "📊 Verified Query Result",
-            "🧠 Insight Agent",
-            "✅ Final Response",
+            f"🔀 Route → {route or 'N/A'}",
         ]
 
-        for item in flow:
+        if route == "data_agent":
+            flow.extend(
+                [
+                    "🧠 Data Agent",
+                    "📝 Text-to-SQL Generation",
+                    "🛡️ SQL Policy Guard",
+                    f"❄️ Snowflake Validation → {validation or 'N/A'}",
+                    "🔧 Snowflake Query Tool",
+                    "📊 Verified Query Result",
+                    "🧠 Insight Agent",
+                    "✅ Final Response",
+                ]
+            )
 
+        else:
+            flow.append(
+                "✅ Final Response"
+            )
+
+        for item in flow:
             st.markdown(
                 f"""
                 <div class="trace-item">
@@ -423,7 +481,7 @@ elif page == "Orchestrator":
         st.markdown("---")
 
         # -------------------------------------------------
-        # Actual Execution Trace
+        # Actual Trace
         # -------------------------------------------------
 
         st.markdown(
@@ -436,18 +494,15 @@ elif page == "Orchestrator":
         )
 
         if trace:
-
             for index, event in enumerate(
                 trace,
                 start=1,
             ):
-
                 st.write(
                     f"**{index}.** ✅ {event}"
                 )
 
         else:
-
             st.info(
                 "No execution trace was recorded."
             )
@@ -455,7 +510,7 @@ elif page == "Orchestrator":
         st.markdown("---")
 
         # -------------------------------------------------
-        # Generated SQL
+        # SQL + Validation
         # -------------------------------------------------
 
         col_left, col_right = st.columns(
@@ -463,7 +518,6 @@ elif page == "Orchestrator":
         )
 
         with col_left:
-
             st.markdown(
                 "### Generated SQL"
             )
@@ -473,20 +527,17 @@ elif page == "Orchestrator":
             )
 
             if sql:
-
                 st.code(
                     sql,
                     language="sql",
                 )
 
             else:
-
                 st.info(
-                    "No SQL was generated."
+                    "No SQL was generated for this execution."
                 )
 
         with col_right:
-
             st.markdown(
                 "### Validation"
             )
@@ -498,15 +549,18 @@ elif page == "Orchestrator":
             )
 
             if validation_status == "PASSED":
-
                 st.success(
                     "SQL validation passed."
                 )
 
             elif validation_status:
-
                 st.warning(
                     validation_status
+                )
+
+            else:
+                st.info(
+                    "No SQL validation was required."
                 )
 
             error = result.get(
@@ -514,19 +568,19 @@ elif page == "Orchestrator":
             )
 
             if error:
-
-                st.error(error)
-
-        # -------------------------------------------------
-        # Data + Insight
-        # -------------------------------------------------
+                st.error(
+                    error
+                )
 
         st.markdown("---")
+
+        # -------------------------------------------------
+        # Raw Output / Insight
+        # -------------------------------------------------
 
         with st.expander(
             "Snowflake Query Result"
         ):
-
             st.write(
                 result.get(
                     "sql_result"
@@ -536,7 +590,6 @@ elif page == "Orchestrator":
         with st.expander(
             "Insight Agent Output"
         ):
-
             st.markdown(
                 result.get(
                     "insight"
@@ -547,7 +600,6 @@ elif page == "Orchestrator":
         with st.expander(
             "Complete AgentState"
         ):
-
             st.json(
                 {
                     key: str(value)
@@ -562,7 +614,6 @@ elif page == "Orchestrator":
 # =========================================================
 
 elif page == "Support Dashboard":
-
     st.markdown(
         '<div class="section-title">'
         'Support Operations Dashboard'
@@ -575,7 +626,6 @@ elif page == "Support Dashboard":
     )
 
     try:
-
         total_tickets = get_scalar(
             """
             SELECT COUNT(*)
@@ -609,25 +659,37 @@ elif page == "Support Dashboard":
 
         k1.metric(
             "Total Tickets",
-            f"{total_tickets:,}",
+            f"{total_tickets:,}"
+            if total_tickets is not None
+            else "N/A",
         )
 
         k2.metric(
             "Avg Resolution",
-            f"{float(avg_resolution):.2f} h",
+            f"{float(avg_resolution):.2f} h"
+            if avg_resolution is not None
+            else "N/A",
         )
 
         k3.metric(
             "Avg Satisfaction",
-            f"{float(avg_satisfaction):.2f}",
+            f"{float(avg_satisfaction):.2f}"
+            if avg_satisfaction is not None
+            else "N/A",
         )
 
         k4.metric(
             "High Risk Tickets",
-            f"{high_risk:,}",
+            f"{high_risk:,}"
+            if high_risk is not None
+            else "N/A",
         )
 
         st.markdown("---")
+
+        # -------------------------------------------------
+        # Channel Performance
+        # -------------------------------------------------
 
         channel_rows = run_query(
             """
@@ -657,7 +719,6 @@ elif page == "Support Dashboard":
         )
 
         with left:
-
             st.markdown(
                 "### Channel Performance"
             )
@@ -669,7 +730,6 @@ elif page == "Support Dashboard":
             )
 
         with right:
-
             st.markdown(
                 "### Resolution Time"
             )
@@ -683,6 +743,10 @@ elif page == "Support Dashboard":
             )
 
         st.markdown("---")
+
+        # -------------------------------------------------
+        # SLA Risk
+        # -------------------------------------------------
 
         risk_rows = run_query(
             """
@@ -716,7 +780,6 @@ elif page == "Support Dashboard":
         )
 
     except Exception as exc:
-
         st.error(
             "Unable to load Snowflake dashboard."
         )
@@ -732,7 +795,6 @@ elif page == "Support Dashboard":
 # =========================================================
 
 elif page == "Data Health":
-
     st.markdown(
         '<div class="section-title">'
         'Data Platform Health'
@@ -745,7 +807,6 @@ elif page == "Data Health":
     )
 
     try:
-
         raw_count = get_scalar(
             """
             SELECT COUNT(*)
@@ -764,8 +825,7 @@ elif page == "Data Health":
             """
             SELECT COUNT(*)
             FROM (
-                SELECT
-                    TICKET_ID
+                SELECT TICKET_ID
                 FROM AI_ENGINEERING_LAB.CURATED.CUSTOMER_SUPPORT_TICKETS
                 GROUP BY TICKET_ID
                 HAVING COUNT(*) > 1
@@ -785,22 +845,30 @@ elif page == "Data Health":
 
         h1.metric(
             "RAW Records",
-            f"{raw_count:,}",
+            f"{raw_count:,}"
+            if raw_count is not None
+            else "N/A",
         )
 
         h2.metric(
             "CURATED Records",
-            f"{curated_count:,}",
+            f"{curated_count:,}"
+            if curated_count is not None
+            else "N/A",
         )
 
         h3.metric(
             "Duplicate IDs",
-            f"{duplicate_count:,}",
+            f"{duplicate_count:,}"
+            if duplicate_count is not None
+            else "N/A",
         )
 
         h4.metric(
             "Invalid Resolution",
-            f"{invalid_resolution:,}",
+            f"{invalid_resolution:,}"
+            if invalid_resolution is not None
+            else "N/A",
         )
 
         st.markdown("---")
@@ -810,13 +878,11 @@ elif page == "Data Health":
             and duplicate_count == 0
             and invalid_resolution == 0
         ):
-
             st.success(
                 "All monitored data-quality checks are healthy."
             )
 
         else:
-
             st.warning(
                 "One or more data-quality checks require attention."
             )
@@ -844,7 +910,6 @@ Agent Consumption
         )
 
     except Exception as exc:
-
         st.error(
             "Unable to retrieve data-health metrics."
         )
@@ -860,7 +925,6 @@ Agent Consumption
 # =========================================================
 
 elif page == "Architecture":
-
     st.markdown(
         '<div class="section-title">'
         'Platform Architecture'
@@ -869,14 +933,13 @@ elif page == "Architecture":
     )
 
     st.write(
-        "The architecture separates application experience, "
+        "The platform separates application experience, "
         "agent orchestration, execution, data, and infrastructure."
     )
 
     a1, a2 = st.columns(2)
 
     with a1:
-
         st.markdown(
             "### Agent Runtime"
         )
@@ -887,7 +950,7 @@ User
  ↓
 Streamlit
  ↓
-LangGraph
+LangGraph Runtime
  ↓
 Supervisor
  ↓
@@ -895,13 +958,13 @@ Conditional Edge
  ↓
 Data Agent
  ↓
-Groq LLM
+Groq-hosted LLM
  ↓
 SQL Guard
  ↓
 Snowflake EXPLAIN
  ↓
-Snowflake Tool
+Snowflake Query Tool
  ↓
 Insight Agent
  ↓
@@ -910,14 +973,13 @@ Final Response
         )
 
     with a2:
-
         st.markdown(
             "### Data Platform"
         )
 
         st.code(
             """
-Kaggle / Source
+Source
  ↓
 Python Ingestion
  ↓
