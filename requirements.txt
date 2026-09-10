@@ -6,3 +6,4 @@ langchain-core
 groq
 requests
 kagglehubpython-dotenv
+pyarrow>=14.0.1,<24
